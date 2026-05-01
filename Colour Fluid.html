@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Colour Fluid</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    font-family: "Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    cursor: crosshair;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+  }
+  .ui {
+    position: fixed;
+    z-index: 10;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 600;
+    user-select: none;
+    pointer-events: none;
+    color: #fff;
+    mix-blend-mode: difference;
+  }
+  .ui.tl { top: 22px; left: 24px; }
+  .ui.tr { top: 22px; right: 24px; text-align: right; }
+  .ui.bl { bottom: 22px; left: 24px; }
+  .ui.br { bottom: 22px; right: 24px; text-align: right; }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.45; }
+    50%      { opacity: 1; }
+  }
+  .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 8px;
+    vertical-align: middle;
+    animation: breathe 4.5s ease-in-out infinite;
+  }
+
+  /* --- 3x3 button grid overlay --------------------------------------- */
+  /* Empty buttons: just a white rounded-rect stroke, transparent fill, so
+     the fluid background reads through them.  Centered on the screen and
+     scaled to viewport so it stays composed at any size. */
+  .grid {
+    position: fixed;
+    z-index: 5;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows:    repeat(3, 1fr);
+    gap: clamp(10px, 1.6vmin, 22px);
+    width:  min(70vmin, 620px);
+    height: min(70vmin, 620px);
+    pointer-events: none;     /* don't block fluid interactions */
+  }
+  .grid button {
+    appearance: none;
+    background: transparent;
+    border: 1.5px solid rgba(255, 255, 255, 0.92);
+    border-radius: clamp(10px, 1.6vmin, 18px);
+    padding: 0;
+    cursor: pointer;
+    pointer-events: auto;
+    position: relative;
+    overflow: hidden;
+    /* base shadow at 0 — expanded on hover for the glow */
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+    transition:
+      border-color 220ms ease,
+      transform   260ms cubic-bezier(.2, .7, .2, 1),
+      box-shadow  260ms ease,
+      background  220ms ease;
+  }
+  /* inner highlight that fades in on hover — pulls a bit of the fluid
+     colour through and brightens the centre of the button */
+  .grid button::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background:
+      radial-gradient(
+        circle at 50% 50%,
+        rgba(255, 255, 255, 0.28) 0%,
+        rgba(255, 255, 255, 0.08) 40%,
+        rgba(255, 255, 255, 0) 75%
+      );
+    opacity: 0;
+    transition: opacity 240ms ease;
+    pointer-events: none;
+  }
+  /* a thin inner ring that draws in on hover — reads as a focused state
+     without obscuring the fluid */
+  .grid button::after {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border-radius: calc(clamp(10px, 1.6vmin, 18px) - 4px);
+    border: 1px solid rgba(255, 255, 255, 0);
+    transition: border-color 220ms ease, inset 220ms ease;
+    pointer-events: none;
+  }
+  .grid button:hover {
+    border-color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+    transform: scale(1.04);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.22),
+      0 0 28px 2px rgba(255, 255, 255, 0.18);
+  }
+  .grid button:hover::before { opacity: 1; }
+  .grid button:hover::after  {
+    border-color: rgba(255, 255, 255, 0.55);
+    inset: 7px;
+  }
+  .grid button:active {
+    transform: scale(0.97);
+    background: rgba(255, 255, 255, 0.16);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.35),
+      0 0 36px 4px rgba(255, 255, 255, 0.28);
+    transition-duration: 90ms;
+  }
+</style>
+</head>
+<body style="font-family: &quot;Inter Tight&quot;">
+  <canvas id="stage"></canvas>
+
+  <div class="grid" aria-label="nine empty buttons">
+    <button type="button" aria-label="slot 1"></button>
+    <button type="button" aria-label="slot 2"></button>
+    <button type="button" aria-label="slot 3"></button>
+    <button type="button" aria-label="slot 4"></button>
+    <button type="button" aria-label="slot 5"></button>
+    <button type="button" aria-label="slot 6"></button>
+    <button type="button" aria-label="slot 7"></button>
+    <button type="button" aria-label="slot 8"></button>
+    <button type="button" aria-label="slot 9"></button>
+  </div>
+
+  <div class="ui tl"><span class="dot"></span>Colour Fluid · No.04</div>
+  <div class="ui tr">Cyan · Lime · Mango · Magenta</div>
+  <div class="ui bl">Move — stir · Click — ripple</div>
+  <div class="ui br">four-channel field</div>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const sctx  = stage.getContext('2d');
+
+  const PALETTE = [
+    [   0, 220, 235 ], // cyan     #00DCEB
+    [  63, 235,   0 ], // lime     #3FEB00
+    [ 255, 213,  37 ], // mango    #FFD525
+    [ 235,  60, 185 ], // magenta  #EB3CB9
+  ];
+
+  // Field render resolution (low — the colour sampling is pure JS so we keep
+  // it small for 60fps; CSS scales it up to viewport).
+  const FIELD_W = 240;
+  let   FIELD_H = 135;
+
+  // Velocity grid resolution — separate from FIELD because the sim only needs
+  // a coarse grid; the field samples it bilinearly.  Coarse grid = smoother,
+  // calmer eddies (which is what we want).
+  const VEL_W = 96;
+  let   VEL_H = 54;
+
+  let W = 0, H = 0, DPR = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    FIELD_H = Math.max(80,  Math.round(FIELD_W * (H / W)));
+    VEL_H   = Math.max(36,  Math.round(VEL_W   * (H / W)));
+
+    stage.width  = FIELD_W;
+    stage.height = FIELD_H;
+    stage.style.width  = '100vw';
+    stage.style.height = '100vh';
+
+    allocVelocity();
+  }
+
+  // --- velocity field ------------------------------------------------------
+  // Two grids (current + scratch) each for u (x-vel) and v (y-vel).  Per
+  // frame we (1) diffuse via a 3-tap blur, (2) damp, (3) advect itself.  A
+  // simplified Stam fluid — no pressure projection — which is intentional:
+  // it gives lazy, swirly motion without true incompressibility, and runs
+  // very cheap.  Reads as "ink in water" plenty well.
+  let U, V, U2, V2;
+  function allocVelocity() {
+    const n = VEL_W * VEL_H;
+    U  = new Float32Array(n);
+    V  = new Float32Array(n);
+    U2 = new Float32Array(n);
+    V2 = new Float32Array(n);
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+
+  // sample velocity at normalized (u,v) ∈ [0..1] with bilinear interpolation
+  function sampleVel(u, v, out) {
+    const x = u * (VEL_W - 1);
+    const y = v * (VEL_H - 1);
+    const i0 = Math.max(0, Math.min(VEL_W - 1, Math.floor(x)));
+    const j0 = Math.max(0, Math.min(VEL_H - 1, Math.floor(y)));
+    const i1 = Math.min(VEL_W - 1, i0 + 1);
+    const j1 = Math.min(VEL_H - 1, j0 + 1);
+    const fx = x - i0, fy = y - j0;
+    const a = j0 * VEL_W + i0;
+    const b = j0 * VEL_W + i1;
+    const c = j1 * VEL_W + i0;
+    const d = j1 * VEL_W + i1;
+    const ua = U[a], ub = U[b], uc = U[c], ud = U[d];
+    const va = V[a], vb = V[b], vc = V[c], vd = V[d];
+    const u01 = ua * (1 - fx) + ub * fx;
+    const u23 = uc * (1 - fx) + ud * fx;
+    const v01 = va * (1 - fx) + vb * fx;
+    const v23 = vc * (1 - fx) + vd * fx;
+    out[0] = u01 * (1 - fy) + u23 * fy;
+    out[1] = v01 * (1 - fy) + v23 * fy;
+  }
+
+  // 3x3 box-blur diffusion + damping + self-advection
+  function stepVelocity(dt) {
+    const w = VEL_W, h = VEL_H;
+
+    // 1. diffuse (small) — average with neighbours
+    const DIFF = 0.18;        // small = current keeps shape longer
+    for (let j = 0; j < h; j++) {
+      const j0 = j === 0 ? j : j - 1;
+      const j1 = j === h - 1 ? j : j + 1;
+      for (let i = 0; i < w; i++) {
+        const i0 = i === 0 ? i : i - 1;
+        const i1 = i === w - 1 ? i : i + 1;
+        const idx = j * w + i;
+        const su = U[j0*w+i0]+U[j0*w+i]+U[j0*w+i1]
+                 + U[j *w+i0]+U[j *w+i]+U[j *w+i1]
+                 + U[j1*w+i0]+U[j1*w+i]+U[j1*w+i1];
+        const sv = V[j0*w+i0]+V[j0*w+i]+V[j0*w+i1]
+                 + V[j *w+i0]+V[j *w+i]+V[j *w+i1]
+                 + V[j1*w+i0]+V[j1*w+i]+V[j1*w+i1];
+        U2[idx] = U[idx] * (1 - DIFF) + (su / 9) * DIFF;
+        V2[idx] = V[idx] * (1 - DIFF) + (sv / 9) * DIFF;
+      }
+    }
+
+    // 2. damping — heavy, so motion fades to stillness over a few seconds
+    const DAMP = Math.exp(-0.55 * dt); // half-life ≈ 1.25s
+    for (let i = 0; i < U2.length; i++) {
+      U2[i] *= DAMP;
+      V2[i] *= DAMP;
+    }
+
+    // 3. self-advection (semi-Lagrangian) — what makes velocity carry itself
+    //    in curls.  For each cell, look "back" along its own velocity and
+    //    sample the previous frame's velocity at that point.
+    const tmp = [0, 0];
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const idx = j * w + i;
+        const u = U2[idx], v = V2[idx];
+        // back-trace in normalized coords; scale advection by dt
+        const bu = i / (w - 1) - u * dt * 0.6;
+        const bv = j / (h - 1) - v * dt * 0.6;
+        // clamp
+        const cu = Math.max(0, Math.min(1, bu));
+        const cv = Math.max(0, Math.min(1, bv));
+        // sample U2/V2 — note: we read from U2/V2 (the diffused/damped one)
+        // and write back into U/V for the next frame.
+        // bilinear sample inline
+        const x = cu * (w - 1);
+        const y = cv * (h - 1);
+        const i0 = Math.floor(x), j0 = Math.floor(y);
+        const i1 = Math.min(w - 1, i0 + 1);
+        const j1 = Math.min(h - 1, j0 + 1);
+        const fx = x - i0, fy = y - j0;
+        const a = j0 * w + i0, b = j0 * w + i1;
+        const c = j1 * w + i0, d = j1 * w + i1;
+        const u01 = U2[a] * (1 - fx) + U2[b] * fx;
+        const u23 = U2[c] * (1 - fx) + U2[d] * fx;
+        const v01 = V2[a] * (1 - fx) + V2[b] * fx;
+        const v23 = V2[c] * (1 - fx) + V2[d] * fx;
+        U[idx] = u01 * (1 - fy) + u23 * fy;
+        V[idx] = v01 * (1 - fy) + v23 * fy;
+      }
+    }
+  }
+
+  // Inject velocity at a normalized point with a Gaussian falloff.
+  function injectVelocity(uc, vc, du, dv, radius) {
+    const w = VEL_W, h = VEL_H;
+    const cx = uc * (w - 1), cy = vc * (h - 1);
+    const r  = radius * Math.max(w, h);
+    const r2 = r * r;
+    const i0 = Math.max(0, Math.floor(cx - r));
+    const i1 = Math.min(w - 1, Math.ceil (cx + r));
+    const j0 = Math.max(0, Math.floor(cy - r));
+    const j1 = Math.min(h - 1, Math.ceil (cy + r));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = i - cx, dy = j - cy;
+        const d2 = dx*dx + dy*dy;
+        if (d2 > r2) continue;
+        const f = Math.exp(-d2 / (r2 * 0.45));
+        const idx = j * w + i;
+        U[idx] += du * f;
+        V[idx] += dv * f;
+      }
+    }
+  }
+
+  // Inject a radial OUTWARD burst — used for ripple on click.
+  function injectRipple(uc, vc, strength, radius) {
+    const w = VEL_W, h = VEL_H;
+    const cx = uc * (w - 1), cy = vc * (h - 1);
+    const r  = radius * Math.max(w, h);
+    const r2 = r * r;
+    const i0 = Math.max(0, Math.floor(cx - r));
+    const i1 = Math.min(w - 1, Math.ceil (cx + r));
+    const j0 = Math.max(0, Math.floor(cy - r));
+    const j1 = Math.min(h - 1, Math.ceil (cy + r));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const dx = i - cx, dy = j - cy;
+        const d2 = dx*dx + dy*dy;
+        if (d2 > r2) continue;
+        const d = Math.sqrt(d2) + 1e-6;
+        // hollow ring profile so it reads as a ripple (0 at centre, peak at
+        // ~70% of radius, 0 at edge).
+        const norm = d / r;                     // 0..1
+        const ring = Math.sin(norm * Math.PI);  // peaks at 0.5
+        const f    = ring * ring;
+        const nx = dx / d, ny = dy / d;
+        const idx = j * w + i;
+        U[idx] += nx * strength * f;
+        V[idx] += ny * strength * f;
+      }
+    }
+  }
+
+  // --- four-colour gradient field, warped by velocity ---------------------
+  // Each colour gets 2–3 centres scattered across the canvas, so the four
+  // colours are no longer one‐region‐each — cyan/lime/mango/magenta each appear
+  // in multiple spots.  We use Mitchell's best‐candidate sampling to keep the
+  // centres reasonably spaced.
+  function scatterCenters(n, tries = 30) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      let best = null, bestD = -1;
+      for (let k = 0; k < tries; k++) {
+        const cand = [0.10 + Math.random() * 0.80, 0.10 + Math.random() * 0.80];
+        let d = Infinity;
+        for (const p of pts) {
+          const dx = cand[0] - p[0], dy = cand[1] - p[1];
+          const dd = dx * dx + dy * dy;
+          if (dd < d) d = dd;
+        }
+        if (d > bestD) { bestD = d; best = cand; }
+      }
+      pts.push(best);
+    }
+    return pts;
+  }
+
+  // Build the centre list: for each palette colour, choose 2 or 3 instances.
+  const centerSpecs = [];
+  for (const colour of PALETTE) {
+    const count = 2 + (Math.random() < 0.5 ? 0 : 1); // 2 or 3
+    for (let k = 0; k < count; k++) centerSpecs.push(colour);
+  }
+  // Shuffle so the placement order doesn't favour any one colour
+  centerSpecs.sort(() => Math.random() - 0.5);
+  const positions = scatterCenters(centerSpecs.length);
+  const centers = centerSpecs.map((c, i) => ({
+    color: c,
+    bx: positions[i][0],
+    by: positions[i][1],
+    ax: 0.08 + Math.random() * 0.22,
+    ay: 0.08 + Math.random() * 0.22,
+    wx: (0.025 + Math.random() * 0.090) * (Math.random() < 0.5 ? -1 : 1),
+    wy: (0.025 + Math.random() * 0.090) * (Math.random() < 0.5 ? -1 : 1),
+    px: Math.random() * Math.PI * 2,
+    py: Math.random() * Math.PI * 2,
+  }));
+  const NC = centers.length;
+
+  let fieldImg = sctx.createImageData(FIELD_W, FIELD_H);
+  // More centres = need slightly softer falloff so neighbouring same‐colour
+  // pools melt into each other instead of looking pixelated.
+  const SOFTNESS = 22;
+  const sampleOut = [0, 0];
+
+  function paintField(t) {
+    if (fieldImg.width !== FIELD_W || fieldImg.height !== FIELD_H) {
+      fieldImg = sctx.createImageData(FIELD_W, FIELD_H);
+    }
+
+    // current centre positions
+    const cx = new Float32Array(NC);
+    const cy = new Float32Array(NC);
+    const cR = new Float32Array(NC);
+    const cG = new Float32Array(NC);
+    const cB = new Float32Array(NC);
+    for (let k = 0; k < NC; k++) {
+      const c = centers[k];
+      cx[k] = c.bx + Math.cos(t * c.wx + c.px) * c.ax;
+      cy[k] = c.by + Math.sin(t * c.wy + c.py) * c.ay;
+      cR[k] = c.color[0]; cG[k] = c.color[1]; cB[k] = c.color[2];
+    }
+
+    const data = fieldImg.data;
+    const fw = FIELD_W, fh = FIELD_H;
+    const VWARP = 0.28;
+
+    // pre-allocate per-row distance scratch
+    const ds = new Float32Array(NC);
+
+    let p = 0;
+    for (let j = 0; j < fh; j++) {
+      const v = j / fh;
+      for (let i = 0; i < fw; i++) {
+        const u = i / fw;
+
+        sampleVel(u, v, sampleOut);
+        const vu = sampleOut[0], vv = sampleOut[1];
+
+        const wu = u - vu * VWARP
+                     + Math.sin(v * 2.7 + t * 0.18) * 0.04;
+        const wv = v - vv * VWARP
+                     + Math.cos(u * 3.3 - t * 0.16) * 0.04;
+
+        // squared distances + min for numeric stability
+        let dm = Infinity;
+        for (let k = 0; k < NC; k++) {
+          const dx = wu - cx[k], dy = wv - cy[k];
+          const d  = dx * dx + dy * dy;
+          ds[k] = d;
+          if (d < dm) dm = d;
+        }
+
+        // softmin weights
+        let sw = 0, rr = 0, gg = 0, bb = 0;
+        for (let k = 0; k < NC; k++) {
+          const w = Math.exp(-(ds[k] - dm) * SOFTNESS);
+          sw += w;
+          rr += cR[k] * w;
+          gg += cG[k] * w;
+          bb += cB[k] * w;
+        }
+        const inv = 1 / sw;
+        data[p++] = rr * inv;
+        data[p++] = gg * inv;
+        data[p++] = bb * inv;
+        data[p++] = 255;
+      }
+    }
+    sctx.putImageData(fieldImg, 0, 0);
+  }
+
+  // --- pointer state -------------------------------------------------------
+  const mouse = {
+    x: -9999, y: -9999,
+    px: -9999, py: -9999,    // previous-frame position (for velocity calc)
+    active: false,
+  };
+  window.addEventListener('pointermove', (e) => {
+    mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true;
+  });
+  window.addEventListener('pointerleave', () => { mouse.active = false; });
+  window.addEventListener('pointerdown',  (e) => {
+    mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true;
+    // ripple — outward radial velocity burst
+    injectRipple(e.clientX / W, e.clientY / H, 1.6, 0.18);
+  });
+
+  // --- ambient idle motion -------------------------------------------------
+  // A handful of "breath" points slowly wander the canvas, each continuously
+  // injecting a tiny tangential (curl) velocity.  Tangential = perpendicular
+  // to its drift direction, so it stirs a soft eddy rather than pushing in a
+  // straight line — reads as relaxed, breathing motion that never stops.
+  const idlePoints = Array.from({ length: 5 }, () => ({
+    bx: 0.5, by: 0.5,
+    ax: 0.30 + Math.random() * 0.12,
+    ay: 0.26 + Math.random() * 0.12,
+    wx: (0.24 + Math.random() * 0.20) * (Math.random() < 0.5 ? -1 : 1),
+    wy: (0.20 + Math.random() * 0.20) * (Math.random() < 0.5 ? -1 : 1),
+    px: Math.random() * Math.PI * 2,
+    py: Math.random() * Math.PI * 2,
+    spin: Math.random() < 0.5 ? -1 : 1,   // CW or CCW eddy
+    phase: Math.random() * Math.PI * 2,   // pulse phase
+  }));
+
+  function injectIdle(t, dt) {
+    for (const p of idlePoints) {
+      const u = 0.5 + Math.cos(t * p.wx + p.px) * p.ax * 0.5;
+      const v = 0.5 + Math.sin(t * p.wy + p.py) * p.ay * 0.5;
+
+      // velocity of THIS idle point (its own drift)
+      const du = -Math.sin(t * p.wx + p.px) * p.ax * 0.5 * p.wx;
+      const dv =  Math.cos(t * p.wy + p.py) * p.ay * 0.5 * p.wy;
+
+      // tangential direction (rotate drift 90°) for an eddy
+      const tx = -dv * p.spin;
+      const ty =  du * p.spin;
+
+      // pulse the strength so eddies breathe in and out instead of being
+      // constant
+      const pulse = 0.6 + 0.4 * Math.sin(t * 0.35 + p.phase);
+
+      // 4x stronger so the fluid always reads as actively breathing
+      const k = 0.24 * pulse;
+      injectVelocity(u, v, tx * k, ty * k, 0.16);
+    }
+  }
+
+  // --- main loop ----------------------------------------------------------
+  let t0   = performance.now();
+  let last = t0;
+
+  function frame(now) {
+    const t  = (now - t0)   / 1000;
+    let   dt = (now - last) / 1000;
+    if (dt > 0.05) dt = 0.05;   // clamp big gaps (tab inactive)
+    last = now;
+
+    // --- inject motion from cursor velocity ---
+    if (mouse.active && mouse.px > -1000) {
+      const vx = mouse.x - mouse.px;
+      const vy = mouse.y - mouse.py;
+      const sp = Math.hypot(vx, vy);
+      if (sp > 0.5) {
+        // scale into velocity-grid units; calm coefficient
+        const k = 0.012;
+        injectVelocity(
+          mouse.x / W, mouse.y / H,
+          vx * k, vy * k,
+          0.10                   // small radius — local stir
+        );
+      }
+    }
+    mouse.px = mouse.x;
+    mouse.py = mouse.y;
+
+    // --- ambient idle stir (always on) ---
+    injectIdle(t, dt);
+
+    // --- step sim, then paint ---
+    stepVelocity(dt);
+    paintField(t);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
